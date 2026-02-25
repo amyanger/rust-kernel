@@ -27,6 +27,7 @@ static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
 
 struct Selectors {
     code_selector: SegmentSelector,
+    data_selector: SegmentSelector,
     tss_selector: SegmentSelector,
 }
 
@@ -43,11 +44,13 @@ pub fn init() {
     let (gdt, selectors) = GDT.call_once(|| {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.append(Descriptor::kernel_code_segment());
+        let data_selector = gdt.append(Descriptor::kernel_data_segment());
         let tss_selector = gdt.append(Descriptor::tss_segment(tss));
         (
             gdt,
             Selectors {
                 code_selector,
+                data_selector,
                 tss_selector,
             },
         )
@@ -56,9 +59,12 @@ pub fn init() {
     gdt.load();
 
     unsafe {
-        use x86_64::instructions::segmentation::{Segment, CS};
+        use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
         use x86_64::instructions::tables::load_tss;
         CS::set_reg(selectors.code_selector);
+        SS::set_reg(selectors.data_selector);
+        DS::set_reg(selectors.data_selector);
+        ES::set_reg(selectors.data_selector);
         load_tss(selectors.tss_selector);
     }
 }

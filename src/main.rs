@@ -10,6 +10,7 @@ use core::panic::PanicInfo;
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
+    config.kernel_stack_size = 512 * 1024; // 512 KiB (default 80 KiB is too small)
     config
 };
 
