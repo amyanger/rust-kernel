@@ -1,14 +1,12 @@
 /// Text output driver.
 ///
-/// The bootloader sets up a graphical framebuffer (not VGA text mode),
-/// so we route all text output through the serial port. The print!/println!
-/// macros write to serial, which QEMU redirects to stdio.
-///
-/// A future enhancement could render text directly to the framebuffer
-/// using a bitmap font.
+/// Routes all print!/println! output to both the framebuffer console
+/// (for on-screen display) and the serial port (for QEMU stdio debug).
 
 use core::fmt;
 use spin::Mutex;
+
+use crate::console::CONSOLE;
 
 const BUFFER_WIDTH: usize = 80;
 
@@ -19,11 +17,34 @@ pub struct Writer {
 impl Writer {
     pub fn write_byte(&mut self, byte: u8) {
         // Write to serial port (COM1 at 0x3F8)
-        unsafe {
-            x86_64::instructions::port::Port::new(0x3F8).write(byte);
+        if byte == 0x08 {
+            // Backspace: erase character on serial terminal (back + space + back)
+            unsafe {
+                let mut port: x86_64::instructions::port::Port<u8> =
+                    x86_64::instructions::port::Port::new(0x3F8);
+                port.write(0x08);
+                port.write(b' ');
+                port.write(0x08);
+            }
+        } else {
+            unsafe {
+                x86_64::instructions::port::Port::new(0x3F8).write(byte);
+            }
         }
+
+        // Write to framebuffer console
+        let mut console = CONSOLE.lock();
+        if let Some(c) = console.as_mut() {
+            c.write_byte(byte);
+        }
+
+        // Track column position
         if byte == b'\n' {
             self.column_position = 0;
+        } else if byte == 0x08 {
+            if self.column_position > 0 {
+                self.column_position -= 1;
+            }
         } else {
             self.column_position += 1;
             if self.column_position >= BUFFER_WIDTH {
@@ -42,8 +63,18 @@ impl Writer {
     }
 
     pub fn clear_screen(&mut self) {
-        // Send ANSI clear sequence to serial terminal
-        self.write_string("\x1b[2J\x1b[H");
+        // Clear framebuffer console
+        let mut console = CONSOLE.lock();
+        if let Some(c) = console.as_mut() {
+            c.clear();
+        }
+
+        // Also send ANSI clear to serial terminal
+        unsafe {
+            for b in b"\x1b[2J\x1b[H" {
+                x86_64::instructions::port::Port::new(0x3F8).write(*b);
+            }
+        }
         self.column_position = 0;
     }
 }

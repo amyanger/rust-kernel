@@ -9,6 +9,8 @@ extern crate alloc;
 use alloc::string::String;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 
+use crate::console::CONSOLE;
+use crate::framebuffer::FRAMEBUFFER;
 use crate::interrupts::SCANCODE_QUEUE;
 use crate::vga_buffer::WRITER;
 
@@ -23,7 +25,12 @@ pub fn run() -> ! {
     let mut input = String::with_capacity(MAX_CMD_LEN);
 
     crate::println!();
-    crate::println!("Welcome to RustKernel v0.1");
+    // Colored welcome banner
+    set_fg_color("cyan");
+    crate::println!("========================================");
+    crate::println!("         Welcome to RustKernel v0.1     ");
+    crate::println!("========================================");
+    set_fg_color("white");
     crate::println!("Type 'help' for available commands.");
     crate::println!();
     crate::print!("> ");
@@ -48,12 +55,7 @@ pub fn run() -> ! {
                                 if !input.is_empty() {
                                     input.pop();
                                     x86_64::instructions::interrupts::without_interrupts(|| {
-                                        let mut writer = WRITER.lock();
-                                        if writer.column_position > 0 {
-                                            writer.column_position -= 1;
-                                            writer.write_byte(b' ');
-                                            writer.column_position -= 1;
-                                        }
+                                        WRITER.lock().write_byte(0x08);
                                     });
                                 }
                             }
@@ -89,13 +91,18 @@ fn execute_command(cmd: &str) {
     match command {
         "help" => {
             crate::println!("Available commands:");
-            crate::println!("  help          - Show this help message");
-            crate::println!("  echo <text>   - Print text to screen");
-            crate::println!("  clear         - Clear the screen");
-            crate::println!("  info          - Show system information");
-            crate::println!("  halt          - Halt the CPU");
-            crate::println!("  panic         - Trigger a kernel panic");
-            crate::println!("  page <addr>   - Show page table info for hex address");
+            crate::println!("  help              - Show this help message");
+            crate::println!("  echo <text>       - Print text to screen");
+            crate::println!("  clear             - Clear the screen");
+            crate::println!("  info              - Show system information");
+            crate::println!("  halt              - Halt the CPU");
+            crate::println!("  panic             - Trigger a kernel panic");
+            crate::println!("  page <addr>       - Show page table info for hex address");
+            crate::println!("  color <name>      - Set text color (white/red/green/blue/cyan/yellow/magenta)");
+            crate::println!("  draw rect <x> <y> <w> <h> <color>");
+            crate::println!("  draw line <x1> <y1> <x2> <y2> <color>");
+            crate::println!("  draw circle <cx> <cy> <r> <color>");
+            crate::println!("  screenfill <color> - Fill screen with color");
         }
         "echo" => {
             crate::println!("{}", args);
@@ -113,6 +120,15 @@ fn execute_command(cmd: &str) {
                 crate::allocator::HEAP_SIZE / 1024,
                 crate::allocator::HEAP_START
             );
+            let fb = FRAMEBUFFER.lock();
+            if let Some(f) = fb.as_ref() {
+                crate::println!(
+                    "Framebuffer: {}x{}, {} bpp",
+                    f.width(),
+                    f.height(),
+                    f.info().bytes_per_pixel
+                );
+            }
         }
         "halt" => {
             crate::println!("Halting CPU...");
@@ -141,9 +157,164 @@ fn execute_command(cmd: &str) {
                 }
             }
         }
+        "color" => {
+            if args.is_empty() {
+                crate::println!("Usage: color <name>");
+                crate::println!("Colors: white, red, green, blue, cyan, yellow, magenta");
+                return;
+            }
+            if set_fg_color(args) {
+                crate::println!("Color set to {}", args);
+            } else {
+                crate::println!("Unknown color: {}", args);
+                crate::println!("Colors: white, red, green, blue, cyan, yellow, magenta");
+            }
+        }
+        "draw" => {
+            cmd_draw(args);
+        }
+        "screenfill" => {
+            if args.is_empty() {
+                crate::println!("Usage: screenfill <color>");
+                return;
+            }
+            if let Some((r, g, b)) = parse_color(args) {
+                // Only lock FRAMEBUFFER — don't reset console cursor,
+                // this is a raw drawing command. Use `clear` to reset text.
+                let mut fb = FRAMEBUFFER.lock();
+                if let Some(f) = fb.as_mut() {
+                    f.clear(r, g, b);
+                }
+            } else {
+                crate::println!("Unknown color: {}", args);
+            }
+        }
         _ => {
             crate::println!("Unknown command: {}", command);
             crate::println!("Type 'help' for available commands.");
         }
+    }
+}
+
+fn cmd_draw(args: &str) {
+    let parts: alloc::vec::Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        crate::println!("Usage: draw rect|line|circle <params> <color>");
+        return;
+    }
+
+    match parts[0] {
+        "rect" => {
+            // draw rect <x> <y> <w> <h> <color>
+            if parts.len() < 6 {
+                crate::println!("Usage: draw rect <x> <y> <w> <h> <color>");
+                return;
+            }
+            let (x, y, w, h) = match (
+                parts[1].parse::<usize>(),
+                parts[2].parse::<usize>(),
+                parts[3].parse::<usize>(),
+                parts[4].parse::<usize>(),
+            ) {
+                (Ok(x), Ok(y), Ok(w), Ok(h)) => (x, y, w, h),
+                _ => {
+                    crate::println!("Invalid coordinates");
+                    return;
+                }
+            };
+            if let Some((r, g, b)) = parse_color(parts[5]) {
+                let mut fb = FRAMEBUFFER.lock();
+                if let Some(f) = fb.as_mut() {
+                    f.fill_rect(x, y, w, h, r, g, b);
+                }
+            } else {
+                crate::println!("Unknown color: {}", parts[5]);
+            }
+        }
+        "line" => {
+            // draw line <x1> <y1> <x2> <y2> <color>
+            if parts.len() < 6 {
+                crate::println!("Usage: draw line <x1> <y1> <x2> <y2> <color>");
+                return;
+            }
+            let (x1, y1, x2, y2) = match (
+                parts[1].parse::<i32>(),
+                parts[2].parse::<i32>(),
+                parts[3].parse::<i32>(),
+                parts[4].parse::<i32>(),
+            ) {
+                (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
+                _ => {
+                    crate::println!("Invalid coordinates");
+                    return;
+                }
+            };
+            if let Some((r, g, b)) = parse_color(parts[5]) {
+                let mut fb = FRAMEBUFFER.lock();
+                if let Some(f) = fb.as_mut() {
+                    f.draw_line(x1, y1, x2, y2, r, g, b);
+                }
+            } else {
+                crate::println!("Unknown color: {}", parts[5]);
+            }
+        }
+        "circle" => {
+            // draw circle <cx> <cy> <r> <color>
+            if parts.len() < 5 {
+                crate::println!("Usage: draw circle <cx> <cy> <r> <color>");
+                return;
+            }
+            let (cx, cy, radius) = match (
+                parts[1].parse::<i32>(),
+                parts[2].parse::<i32>(),
+                parts[3].parse::<i32>(),
+            ) {
+                (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+                _ => {
+                    crate::println!("Invalid coordinates");
+                    return;
+                }
+            };
+            if let Some((r, g, b)) = parse_color(parts[4]) {
+                let mut fb = FRAMEBUFFER.lock();
+                if let Some(f) = fb.as_mut() {
+                    f.draw_circle(cx, cy, radius, r, g, b);
+                }
+            } else {
+                crate::println!("Unknown color: {}", parts[4]);
+            }
+        }
+        _ => {
+            crate::println!("Unknown draw command: {}", parts[0]);
+            crate::println!("Shapes: rect, line, circle");
+        }
+    }
+}
+
+fn parse_color(name: &str) -> Option<(u8, u8, u8)> {
+    match name {
+        "white" => Some((255, 255, 255)),
+        "red" => Some((255, 0, 0)),
+        "green" => Some((0, 255, 0)),
+        "blue" => Some((0, 0, 255)),
+        "cyan" => Some((0, 255, 255)),
+        "yellow" => Some((255, 255, 0)),
+        "magenta" => Some((255, 0, 255)),
+        "black" => Some((0, 0, 0)),
+        "gray" | "grey" => Some((128, 128, 128)),
+        "orange" => Some((255, 165, 0)),
+        _ => None,
+    }
+}
+
+fn set_fg_color(name: &str) -> bool {
+    if let Some((r, g, b)) = parse_color(name) {
+        let mut console = CONSOLE.lock();
+        if let Some(c) = console.as_mut() {
+            c.set_fg(r, g, b);
+        }
+        true
+    } else {
+        false
     }
 }

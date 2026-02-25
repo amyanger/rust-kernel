@@ -1,6 +1,8 @@
 # RustKernel
 
-A minimal bare-metal x86_64 kernel written entirely in Rust. Boots on QEMU and implements core OS functionality from scratch — interrupt handling, memory management, heap allocation, and an interactive shell.
+A minimal bare-metal x86_64 kernel written entirely in Rust. Boots on QEMU and implements core OS functionality from scratch — interrupt handling, memory management, heap allocation, framebuffer graphics, and an interactive shell.
+
+![RustKernel running in QEMU](screenshot.png)
 
 ## Features
 
@@ -9,8 +11,11 @@ A minimal bare-metal x86_64 kernel written entirely in Rust. Boots on QEMU and i
 - **Interrupt handling** — Full IDT setup with handlers for CPU exceptions (breakpoint, double fault, page fault) and hardware interrupts (timer, keyboard) via the 8259 PIC.
 - **4-level paging** — x86_64 page table hierarchy (PML4 → PDPT → PD → PT) with an offset page table mapper and boot-info-based frame allocator.
 - **Heap allocation** — 256 KiB heap using a linked-list free-list allocator, enabling `Box`, `Vec`, `String`, and other `alloc` types.
-- **Serial I/O** — UART 16550 driver on COM1 for debug output, redirected to the host terminal via QEMU.
-- **Interactive shell** — Command-line interface with keyboard input (US QWERTY layout) supporting `help`, `echo`, `clear`, `info`, `halt`, `panic`, and `page` commands.
+- **Framebuffer graphics** — 1280x720 BGR framebuffer with pixel drawing, filled rectangles, Bresenham line algorithm, and midpoint circle algorithm.
+- **Bitmap font rendering** — Embedded 8x16 VGA font (Code Page 437) rendered directly to the framebuffer.
+- **Text console** — Full-screen text console with cursor tracking, line wrapping, scrolling, and configurable foreground/background colors.
+- **Serial I/O** — UART 16550 driver on COM1 for debug output, redirected to the host terminal via QEMU. All text output goes to both the framebuffer and serial simultaneously.
+- **Interactive shell** — Command-line interface with keyboard input (US QWERTY layout) supporting text commands, color changes, and drawing primitives.
 - **Double-fault safety** — Dedicated IST stack for the double-fault handler prevents triple faults on stack overflow.
 - **Integration tests** — Custom test framework running under QEMU with tests for boot, heap allocation, and stack overflow handling.
 
@@ -28,8 +33,12 @@ rust-kernel/
 ├── src/
 │   ├── main.rs               # Kernel entry point & initialization
 │   ├── lib.rs                # Library root & custom test harness
+│   ├── framebuffer.rs        # Framebuffer driver & drawing primitives
+│   ├── font.rs               # 8x16 bitmap font renderer
+│   ├── font_8x16.bin         # VGA CP437 font binary (256 glyphs)
+│   ├── console.rs            # Text console with cursor & scrolling
 │   ├── serial.rs             # UART 16550 serial port driver
-│   ├── vga_buffer.rs         # Text output (routed through serial)
+│   ├── vga_buffer.rs         # Print macros (framebuffer + serial output)
 │   ├── gdt.rs                # Global Descriptor Table & TSS setup
 │   ├── interrupts.rs         # IDT, PIC, exception & IRQ handlers
 │   ├── memory.rs             # Paging setup & frame allocation
@@ -97,10 +106,15 @@ Once the kernel boots, you'll be dropped into an interactive shell:
 | `help` | Show available commands |
 | `echo <text>` | Print text back to the console |
 | `clear` | Clear the screen |
-| `info` | Display system info (architecture, heap size & address) |
+| `info` | Display system info (architecture, heap, framebuffer) |
 | `halt` | Halt the CPU |
 | `panic` | Trigger a kernel panic (for testing) |
 | `page <hex>` | Show page table index breakdown for a virtual address |
+| `color <name>` | Set text color (white/red/green/blue/cyan/yellow/magenta) |
+| `draw rect <x> <y> <w> <h> <color>` | Draw a filled rectangle |
+| `draw line <x1> <y1> <x2> <y2> <color>` | Draw a line (Bresenham's algorithm) |
+| `draw circle <cx> <cy> <r> <color>` | Draw a filled circle (midpoint algorithm) |
+| `screenfill <color>` | Fill the entire screen with a color |
 
 ## Architecture Overview
 
