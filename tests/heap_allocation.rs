@@ -1,0 +1,71 @@
+/// Integration test: verify heap allocation works (Box, Vec, many allocations).
+
+#![no_std]
+#![no_main]
+#![feature(custom_test_frameworks)]
+#![test_runner(kernel::test_runner)]
+#![reexport_test_harness_entry = "test_main"]
+
+extern crate alloc;
+
+use alloc::{boxed::Box, vec::Vec};
+use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
+use core::panic::PanicInfo;
+use kernel::{allocator, memory};
+
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
+    config
+};
+
+entry_point!(main, config = &BOOTLOADER_CONFIG);
+
+fn main(boot_info: &'static mut BootInfo) -> ! {
+    kernel::init();
+
+    let phys_mem_offset = x86_64::VirtAddr::new(
+        boot_info
+            .physical_memory_offset
+            .into_option()
+            .expect("physical_memory_offset not available"),
+    );
+    let mut mapper = unsafe { memory::init(phys_mem_offset) };
+    let mut frame_allocator =
+        unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_regions) };
+    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
+
+    test_main();
+    kernel::hlt_loop();
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    kernel::test_panic_handler(info)
+}
+
+#[test_case]
+fn simple_allocation() {
+    let heap_value_1 = Box::new(41);
+    let heap_value_2 = Box::new(13);
+    assert_eq!(*heap_value_1, 41);
+    assert_eq!(*heap_value_2, 13);
+}
+
+#[test_case]
+fn large_vec() {
+    let n = 1000;
+    let mut vec = Vec::new();
+    for i in 0..n {
+        vec.push(i);
+    }
+    assert_eq!(vec.iter().sum::<u64>(), (n - 1) * n / 2);
+}
+
+#[test_case]
+fn many_boxes() {
+    for i in 0..allocator::HEAP_SIZE {
+        let x = Box::new(i);
+        assert_eq!(*x, i);
+    }
+}
