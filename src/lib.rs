@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod allocator;
 pub mod console;
+pub mod filesystem;
 pub mod font;
 pub mod framebuffer;
 pub mod gdt;
