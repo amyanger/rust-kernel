@@ -13,6 +13,7 @@ pub type Pid = u64;
 pub enum ProcessState {
     Ready,
     Running,
+    Sleeping,
     Blocked,
     Terminated,
 }
@@ -22,6 +23,7 @@ impl core::fmt::Display for ProcessState {
         match self {
             ProcessState::Ready => write!(f, "Ready"),
             ProcessState::Running => write!(f, "Running"),
+            ProcessState::Sleeping => write!(f, "Sleeping"),
             ProcessState::Blocked => write!(f, "Blocked"),
             ProcessState::Terminated => write!(f, "Terminated"),
         }
@@ -34,6 +36,7 @@ pub struct Process {
     pub state: ProcessState,
     pub parent_pid: Option<Pid>,
     pub exit_code: Option<i32>,
+    pub is_thread: bool,
 }
 
 pub struct ProcessTable {
@@ -57,6 +60,21 @@ impl ProcessTable {
                 state: ProcessState::Ready,
                 parent_pid,
                 exit_code: None,
+                is_thread: false,
+            },
+        );
+    }
+
+    pub fn register_thread(&mut self, pid: Pid, name: String, parent_pid: Option<Pid>) {
+        self.processes.insert(
+            pid,
+            Process {
+                task_id: TaskId::from_u64(pid),
+                name,
+                state: ProcessState::Ready,
+                parent_pid,
+                exit_code: None,
+                is_thread: true,
             },
         );
     }

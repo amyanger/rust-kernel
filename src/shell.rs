@@ -118,8 +118,10 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
             crate::println!("  pwd                - Print working directory");
             crate::println!("  write <path> <txt> - Write text to file");
             crate::println!("  ps                 - List running processes");
-            crate::println!("  spawn <name> [n]   - Spawn demo counter (n ticks, default 5)");
-            crate::println!("  kill <pid>         - Kill a process by PID");
+            crate::println!("  spawn <name> [n]   - Spawn async demo counter (n ticks, default 5)");
+            crate::println!("  tspawn <name> [n]  - Spawn preemptible thread (n ticks, default 5)");
+            crate::println!("  sleep <ms>         - Sleep for given milliseconds (spawns a thread)");
+            crate::println!("  kill <pid>         - Kill a process or thread by PID");
             crate::println!("  draw rect <x> <y> <w> <h> <color>");
             crate::println!("  draw line <x1> <y1> <x2> <y2> <color>");
             crate::println!("  draw circle <cx> <cy> <r> <color>");
@@ -323,12 +325,13 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
         "ps" => {
             let table = PROCESS_TABLE.lock();
             if let Some(table) = table.as_ref() {
-                crate::println!("{:<6} {:<6} {:<12} {}", "PID", "PPID", "STATE", "NAME");
+                crate::println!("{:<6} {:<4} {:<6} {:<12} {}", "PID", "TYPE", "PPID", "STATE", "NAME");
                 for (pid, proc) in table.list() {
                     let ppid = match proc.parent_pid {
                         Some(p) => alloc::format!("{}", p),
                         None => String::from("-"),
                     };
+                    let type_str = if proc.is_thread { "[T]" } else { "[A]" };
                     let state_str = match proc.state {
                         crate::task::process::ProcessState::Terminated => {
                             let code = proc.exit_code.unwrap_or(0);
@@ -336,7 +339,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                         }
                         ref s => alloc::format!("{}", s),
                     };
-                    crate::println!("{:<6} {:<6} {:<12} {}", pid, ppid, state_str, proc.name);
+                    crate::println!("{:<6} {:<4} {:<6} {:<12} {}", pid, type_str, ppid, state_str, proc.name);
                 }
             }
         }
@@ -364,6 +367,50 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
             );
             crate::println!("Spawned '{}' as PID {} ({} ticks)", name, pid, count);
         }
+        "tspawn" => {
+            if args.is_empty() {
+                crate::println!("Usage: tspawn <name> [count]");
+                return;
+            }
+            let (name, count_str) = match args.split_once(' ') {
+                Some((n, c)) => (n, c.trim()),
+                None => (args, "5"),
+            };
+            let count: u32 = match count_str.parse() {
+                Ok(c) => c,
+                Err(_) => {
+                    crate::println!("tspawn: invalid count '{}'", count_str);
+                    return;
+                }
+            };
+            let pid = crate::task::scheduler::spawn_thread(
+                String::from(name),
+                crate::task::scheduler::demo_thread_entry,
+                count as u64,
+                Some(1), // shell is parent
+            );
+            crate::println!("Spawned thread '{}' as PID {} ({} ticks)", name, pid, count);
+        }
+        "sleep" => {
+            if args.is_empty() {
+                crate::println!("Usage: sleep <ms>");
+                return;
+            }
+            let ms: u64 = match args.parse() {
+                Ok(m) => m,
+                Err(_) => {
+                    crate::println!("sleep: invalid duration '{}'", args);
+                    return;
+                }
+            };
+            let pid = crate::task::scheduler::spawn_thread(
+                String::from("sleep"),
+                crate::task::scheduler::sleep_thread_entry,
+                ms,
+                Some(1),
+            );
+            crate::println!("Sleeping for {}ms (PID {})", ms, pid);
+        }
         "kill" => {
             if args.is_empty() {
                 crate::println!("Usage: kill <pid>");
@@ -388,7 +435,12 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 crate::println!("kill: no such process (PID {})", pid);
                 return;
             }
-            crate::task::executor::kill_request(pid);
+            // Try killing as thread first, fall back to async task kill
+            if crate::task::scheduler::is_thread(pid) {
+                crate::task::scheduler::kill_thread(pid);
+            } else {
+                crate::task::executor::kill_request(pid);
+            }
             crate::println!("Killed PID {}", pid);
         }
         "screenfill" => {

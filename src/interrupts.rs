@@ -9,10 +9,24 @@
 
 use crate::gdt;
 use crate::hlt_loop;
+use core::sync::atomic::{AtomicU64, Ordering};
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::VirtAddr;
+
+pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Configure the 8254 PIT to fire at ~100 Hz (10ms timeslice).
+pub fn init_pit() {
+    let divisor: u16 = (1_193_182u32 / 100) as u16;
+    unsafe {
+        Port::new(0x43).write(0x36u8);
+        Port::new(0x40).write((divisor & 0xFF) as u8);
+        Port::new(0x40).write((divisor >> 8) as u8);
+    }
+}
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -81,7 +95,10 @@ pub fn init_idt() {
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
         idt.page_fault.set_handler_fn(page_fault_handler);
-        idt[InterruptIndex::Timer as u8].set_handler_fn(timer_interrupt_handler);
+        unsafe {
+            idt[InterruptIndex::Timer as u8]
+                .set_handler_addr(VirtAddr::new(crate::task::context::timer_isr_addr()));
+        }
         idt[InterruptIndex::Keyboard as u8].set_handler_fn(keyboard_interrupt_handler);
         idt
     });
@@ -116,11 +133,25 @@ extern "x86-interrupt" fn page_fault_handler(
 
 // --- Hardware Interrupt Handlers ---
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+/// Called from the raw timer ISR assembly stub.
+/// Receives the current stack frame, returns the frame to resume (possibly different).
+#[no_mangle]
+extern "C" fn timer_tick_handler(frame: *mut crate::task::context::InterruptFrame) -> *mut crate::task::context::InterruptFrame {
+    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Timer as u8);
     }
+
+    // Try to schedule a context switch
+    if crate::task::scheduler::is_enabled() {
+        if let Some(new_frame) = crate::task::scheduler::try_schedule(frame) {
+            return new_frame;
+        }
+    }
+
+    frame
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

@@ -92,8 +92,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     kernel::filesystem::init();
     kernel::serial_println!("Filesystem initialized");
 
+    kernel::interrupts::init_pit();
+    kernel::serial_println!("PIT configured at 100 Hz");
+
     kernel::task::process::init();
     kernel::serial_println!("Process table initialized");
+
+    kernel::task::scheduler::init();
 
     kernel::println!("All subsystems initialized.");
 
