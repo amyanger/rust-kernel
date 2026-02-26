@@ -10,6 +10,7 @@ use alloc::string::String;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 
 use crate::console::CONSOLE;
+use crate::filesystem::FILESYSTEM;
 use crate::framebuffer::FRAMEBUFFER;
 use crate::task::keyboard::ScancodeStream;
 use crate::vga_buffer::WRITER;
@@ -23,6 +24,7 @@ pub async fn run() {
         HandleControl::Ignore,
     );
     let mut input = String::with_capacity(MAX_CMD_LEN);
+    let mut cwd: u64 = 0;
     let scancode_stream = ScancodeStream::new();
 
     crate::println!();
@@ -34,7 +36,7 @@ pub async fn run() {
     set_fg_color("white");
     crate::println!("Type 'help' for available commands.");
     crate::println!();
-    crate::print!("> ");
+    print_prompt(cwd);
 
     loop {
         let scancode = scancode_stream.next().await;
@@ -45,9 +47,9 @@ pub async fn run() {
                     DecodedKey::Unicode(character) => match character {
                         '\n' => {
                             crate::println!();
-                            execute_command(&input);
+                            execute_command(&input, &mut cwd);
                             input.clear();
-                            crate::print!("> ");
+                            print_prompt(cwd);
                         }
                         '\u{0008}' => {
                             if !input.is_empty() {
@@ -72,7 +74,19 @@ pub async fn run() {
     }
 }
 
-fn execute_command(cmd: &str) {
+fn print_prompt(cwd: u64) {
+    let path = {
+        let fs = FILESYSTEM.lock();
+        if let Some(fs) = fs.as_ref() {
+            fs.get_path(cwd).unwrap_or_else(|_| String::from("/"))
+        } else {
+            String::from("/")
+        }
+    };
+    crate::print!("{}> ", path);
+}
+
+fn execute_command(cmd: &str, cwd: &mut u64) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
@@ -94,6 +108,14 @@ fn execute_command(cmd: &str) {
             crate::println!("  panic             - Trigger a kernel panic");
             crate::println!("  page <addr>       - Show page table info for hex address");
             crate::println!("  color <name>      - Set text color (white/red/green/blue/cyan/yellow/magenta)");
+            crate::println!("  ls [path]          - List directory contents");
+            crate::println!("  cat <path>         - Print file contents");
+            crate::println!("  touch <path>       - Create empty file");
+            crate::println!("  mkdir <path>       - Create directory");
+            crate::println!("  rm <path>          - Remove file or empty directory");
+            crate::println!("  cd [path]          - Change directory (no args = root)");
+            crate::println!("  pwd                - Print working directory");
+            crate::println!("  write <path> <txt> - Write text to file");
             crate::println!("  draw rect <x> <y> <w> <h> <color>");
             crate::println!("  draw line <x1> <y1> <x2> <y2> <color>");
             crate::println!("  draw circle <cx> <cy> <r> <color>");
@@ -167,6 +189,132 @@ fn execute_command(cmd: &str) {
         }
         "draw" => {
             cmd_draw(args);
+        }
+        "ls" => {
+            let target = if args.is_empty() { "." } else { args };
+            let mut fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_mut() {
+                match fs.resolve_path(target, *cwd) {
+                    Ok(dir_id) => match fs.list_dir(dir_id) {
+                        Ok(entries) => {
+                            crate::println!(".   ../");
+                            for (name, is_dir) in entries {
+                                if is_dir {
+                                    crate::println!("{}/", name);
+                                } else {
+                                    crate::println!("{}", name);
+                                }
+                            }
+                        }
+                        Err(e) => crate::println!("ls: {}", e),
+                    },
+                    Err(e) => crate::println!("ls: {}", e),
+                }
+            }
+        }
+        "cat" => {
+            if args.is_empty() {
+                crate::println!("Usage: cat <path>");
+                return;
+            }
+            let fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_ref() {
+                match fs.resolve_path(args, *cwd) {
+                    Ok(inode_id) => match fs.read_file(inode_id) {
+                        Ok(data) => {
+                            let text = core::str::from_utf8(data).unwrap_or("<binary data>");
+                            crate::println!("{}", text);
+                        }
+                        Err(e) => crate::println!("cat: {}", e),
+                    },
+                    Err(e) => crate::println!("cat: {}", e),
+                }
+            }
+        }
+        "touch" => {
+            if args.is_empty() {
+                crate::println!("Usage: touch <path>");
+                return;
+            }
+            let mut fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_mut() {
+                match fs.create_file(args, *cwd) {
+                    Ok(_) => {}
+                    Err(crate::filesystem::FsError::AlreadyExists) => {} // idempotent
+                    Err(e) => crate::println!("touch: {}", e),
+                }
+            }
+        }
+        "mkdir" => {
+            if args.is_empty() {
+                crate::println!("Usage: mkdir <path>");
+                return;
+            }
+            let mut fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_mut() {
+                match fs.create_dir(args, *cwd) {
+                    Ok(_) => {}
+                    Err(e) => crate::println!("mkdir: {}", e),
+                }
+            }
+        }
+        "rm" => {
+            if args.is_empty() {
+                crate::println!("Usage: rm <path>");
+                return;
+            }
+            let mut fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_mut() {
+                match fs.remove(args, *cwd) {
+                    Ok(()) => {}
+                    Err(e) => crate::println!("rm: {}", e),
+                }
+            }
+        }
+        "cd" => {
+            let target = if args.is_empty() { "/" } else { args };
+            let fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_ref() {
+                match fs.resolve_path(target, *cwd) {
+                    Ok(inode_id) => {
+                        if fs.is_directory(inode_id) {
+                            *cwd = inode_id;
+                        } else {
+                            crate::println!("cd: not a directory");
+                        }
+                    }
+                    Err(e) => crate::println!("cd: {}", e),
+                }
+            }
+        }
+        "pwd" => {
+            let fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_ref() {
+                match fs.get_path(*cwd) {
+                    Ok(path) => crate::println!("{}", path),
+                    Err(e) => crate::println!("pwd: {}", e),
+                }
+            }
+        }
+        "write" => {
+            if args.is_empty() {
+                crate::println!("Usage: write <path> <text>");
+                return;
+            }
+            let (path, text) = match args.split_once(' ') {
+                Some((p, t)) => (p, t),
+                None => {
+                    crate::println!("Usage: write <path> <text>");
+                    return;
+                }
+            };
+            let mut fs = FILESYSTEM.lock();
+            if let Some(fs) = fs.as_mut() {
+                match fs.write_file(path, text.as_bytes(), *cwd) {
+                    Ok(()) => {}
+                    Err(e) => crate::println!("write: {}", e),
+                }
+            }
         }
         "screenfill" => {
             if args.is_empty() {
