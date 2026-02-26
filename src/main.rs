@@ -92,10 +92,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     kernel::filesystem::init();
     kernel::serial_println!("Filesystem initialized");
 
+    kernel::task::process::init();
+    kernel::serial_println!("Process table initialized");
+
     kernel::println!("All subsystems initialized.");
 
     let mut executor = kernel::task::executor::Executor::new();
-    executor.spawn(kernel::task::Task::new(kernel::shell::run()));
+    executor.spawn_process(
+        alloc::string::String::from("shell"),
+        kernel::shell::run(),
+        None,
+    );
     executor.run();
 }
 

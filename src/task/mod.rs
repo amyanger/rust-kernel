@@ -1,5 +1,6 @@
 pub mod executor;
 pub mod keyboard;
+pub mod process;
 
 extern crate alloc;
 
@@ -14,8 +15,16 @@ pub struct TaskId(u64);
 
 impl TaskId {
     fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         TaskId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    pub fn from_u64(id: u64) -> Self {
+        TaskId(id)
     }
 }
 

@@ -13,6 +13,7 @@ use crate::console::CONSOLE;
 use crate::filesystem::FILESYSTEM;
 use crate::framebuffer::FRAMEBUFFER;
 use crate::task::keyboard::ScancodeStream;
+use crate::task::process::PROCESS_TABLE;
 use crate::vga_buffer::WRITER;
 
 const MAX_CMD_LEN: usize = 256;
@@ -116,6 +117,9 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
             crate::println!("  cd [path]          - Change directory (no args = root)");
             crate::println!("  pwd                - Print working directory");
             crate::println!("  write <path> <txt> - Write text to file");
+            crate::println!("  ps                 - List running processes");
+            crate::println!("  spawn <name> [n]   - Spawn demo counter (n ticks, default 5)");
+            crate::println!("  kill <pid>         - Kill a process by PID");
             crate::println!("  draw rect <x> <y> <w> <h> <color>");
             crate::println!("  draw line <x1> <y1> <x2> <y2> <color>");
             crate::println!("  draw circle <cx> <cy> <r> <color>");
@@ -315,6 +319,77 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                     Err(e) => crate::println!("write: {}", e),
                 }
             }
+        }
+        "ps" => {
+            let table = PROCESS_TABLE.lock();
+            if let Some(table) = table.as_ref() {
+                crate::println!("{:<6} {:<6} {:<12} {}", "PID", "PPID", "STATE", "NAME");
+                for (pid, proc) in table.list() {
+                    let ppid = match proc.parent_pid {
+                        Some(p) => alloc::format!("{}", p),
+                        None => String::from("-"),
+                    };
+                    let state_str = match proc.state {
+                        crate::task::process::ProcessState::Terminated => {
+                            let code = proc.exit_code.unwrap_or(0);
+                            alloc::format!("Exit({})", code)
+                        }
+                        ref s => alloc::format!("{}", s),
+                    };
+                    crate::println!("{:<6} {:<6} {:<12} {}", pid, ppid, state_str, proc.name);
+                }
+            }
+        }
+        "spawn" => {
+            if args.is_empty() {
+                crate::println!("Usage: spawn <name> [count]");
+                return;
+            }
+            let (name, count_str) = match args.split_once(' ') {
+                Some((n, c)) => (n, c.trim()),
+                None => (args, "5"),
+            };
+            let count: u32 = match count_str.parse() {
+                Ok(c) => c,
+                Err(_) => {
+                    crate::println!("spawn: invalid count '{}'", count_str);
+                    return;
+                }
+            };
+            let name = String::from(name);
+            let pid = crate::task::executor::spawn_request(
+                name.clone(),
+                crate::task::process::demo_counter(name.clone(), count),
+                Some(1), // shell is parent
+            );
+            crate::println!("Spawned '{}' as PID {} ({} ticks)", name, pid, count);
+        }
+        "kill" => {
+            if args.is_empty() {
+                crate::println!("Usage: kill <pid>");
+                return;
+            }
+            let pid: u64 = match args.parse() {
+                Ok(p) => p,
+                Err(_) => {
+                    crate::println!("kill: invalid PID '{}'", args);
+                    return;
+                }
+            };
+            if pid == 1 {
+                crate::println!("kill: cannot kill init process (PID 1)");
+                return;
+            }
+            let alive = {
+                let table = PROCESS_TABLE.lock();
+                table.as_ref().map(|t| t.is_alive(pid)).unwrap_or(false)
+            };
+            if !alive {
+                crate::println!("kill: no such process (PID {})", pid);
+                return;
+            }
+            crate::task::executor::kill_request(pid);
+            crate::println!("Killed PID {}", pid);
         }
         "screenfill" => {
             if args.is_empty() {
