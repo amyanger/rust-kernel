@@ -90,7 +90,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     kernel::serial_println!("Heap initialized");
 
     kernel::println!("All subsystems initialized.");
-    kernel::shell::run();
+
+    let mut executor = kernel::task::executor::Executor::new();
+    executor.spawn(kernel::task::Task::new(kernel::shell::run()));
+    executor.run();
 }
 
 #[panic_handler]

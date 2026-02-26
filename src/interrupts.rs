@@ -128,6 +128,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let scancode: u8 = unsafe { port.read() };
 
     SCANCODE_QUEUE.lock().push(scancode);
+    crate::task::keyboard::notify_keyboard_interrupt();
 
     unsafe {
         PICS.lock()

@@ -1,5 +1,5 @@
-/// Integration test: verify stack overflow triggers a double fault
-/// (handled on a separate IST stack) instead of a triple fault.
+// Integration test: verify stack overflow triggers a double fault
+// (handled on a separate IST stack) instead of a triple fault.
 
 #![no_std]
 #![no_main]

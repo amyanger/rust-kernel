@@ -1,10 +1,10 @@
-/// Integration test: verify heap allocation works (Box, Vec, many allocations).
+// Integration test: verify heap allocation works (Box, Vec, many allocations).
 
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
 #![test_runner(kernel::test_runner)]
-#![reexport_test_harness_entry = "test_main"]
+#![reexport_test_harness_main = "test_main"]
 
 extern crate alloc;
 

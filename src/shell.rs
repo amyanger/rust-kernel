@@ -11,18 +11,19 @@ use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 
 use crate::console::CONSOLE;
 use crate::framebuffer::FRAMEBUFFER;
-use crate::interrupts::SCANCODE_QUEUE;
+use crate::task::keyboard::ScancodeStream;
 use crate::vga_buffer::WRITER;
 
 const MAX_CMD_LEN: usize = 256;
 
-pub fn run() -> ! {
+pub async fn run() {
     let mut keyboard = Keyboard::new(
         ScancodeSet1::new(),
         layouts::Us104Key,
         HandleControl::Ignore,
     );
     let mut input = String::with_capacity(MAX_CMD_LEN);
+    let scancode_stream = ScancodeStream::new();
 
     crate::println!();
     // Colored welcome banner
@@ -36,43 +37,37 @@ pub fn run() -> ! {
     crate::print!("> ");
 
     loop {
-        let scancode = x86_64::instructions::interrupts::without_interrupts(|| {
-            SCANCODE_QUEUE.lock().pop()
-        });
+        let scancode = scancode_stream.next().await;
 
-        if let Some(scancode) = scancode {
-            if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-                if let Some(key) = keyboard.process_keyevent(key_event) {
-                    match key {
-                        DecodedKey::Unicode(character) => match character {
-                            '\n' => {
-                                crate::println!();
-                                execute_command(&input);
-                                input.clear();
-                                crate::print!("> ");
+        if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+            if let Some(key) = keyboard.process_keyevent(key_event) {
+                match key {
+                    DecodedKey::Unicode(character) => match character {
+                        '\n' => {
+                            crate::println!();
+                            execute_command(&input);
+                            input.clear();
+                            crate::print!("> ");
+                        }
+                        '\u{0008}' => {
+                            if !input.is_empty() {
+                                input.pop();
+                                x86_64::instructions::interrupts::without_interrupts(|| {
+                                    WRITER.lock().write_byte(0x08);
+                                });
                             }
-                            '\u{0008}' => {
-                                if !input.is_empty() {
-                                    input.pop();
-                                    x86_64::instructions::interrupts::without_interrupts(|| {
-                                        WRITER.lock().write_byte(0x08);
-                                    });
-                                }
+                        }
+                        c if c.is_ascii() && !c.is_control() => {
+                            if input.len() < MAX_CMD_LEN {
+                                input.push(c);
+                                crate::print!("{}", c);
                             }
-                            c if c.is_ascii() && !c.is_control() => {
-                                if input.len() < MAX_CMD_LEN {
-                                    input.push(c);
-                                    crate::print!("{}", c);
-                                }
-                            }
-                            _ => {}
-                        },
-                        DecodedKey::RawKey(_) => {}
-                    }
+                        }
+                        _ => {}
+                    },
+                    DecodedKey::RawKey(_) => {}
                 }
             }
-        } else {
-            x86_64::instructions::hlt();
         }
     }
 }
