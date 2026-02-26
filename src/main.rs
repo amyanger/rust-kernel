@@ -89,6 +89,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         .expect("heap initialization failed");
     kernel::serial_println!("Heap initialized");
 
+    kernel::filesystem::init();
+    kernel::serial_println!("Filesystem initialized");
+
     kernel::println!("All subsystems initialized.");
 
     let mut executor = kernel::task::executor::Executor::new();
