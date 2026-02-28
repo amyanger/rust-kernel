@@ -103,7 +103,7 @@ impl Executor {
 
         let mut table = PROCESS_TABLE.lock();
         if let Some(table) = table.as_mut() {
-            table.register(task_id, name, parent_pid);
+            table.register(task_id, name, parent_pid, false);
         }
     }
 
@@ -136,7 +136,7 @@ impl Executor {
 
                     let mut table = PROCESS_TABLE.lock();
                     if let Some(table) = table.as_mut() {
-                        table.register(task_id, req.name, req.parent_pid);
+                        table.register(task_id, req.name, req.parent_pid, false);
                     }
                 }
                 None => break,

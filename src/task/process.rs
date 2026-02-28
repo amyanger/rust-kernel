@@ -9,6 +9,9 @@ use super::TaskId;
 
 pub type Pid = u64;
 
+/// PID of the shell process (first task spawned by the executor).
+pub const SHELL_PID: Pid = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Ready,
@@ -50,7 +53,7 @@ impl ProcessTable {
         }
     }
 
-    pub fn register(&mut self, task_id: TaskId, name: String, parent_pid: Option<Pid>) {
+    pub fn register(&mut self, task_id: TaskId, name: String, parent_pid: Option<Pid>, is_thread: bool) {
         let pid = task_id.as_u64();
         self.processes.insert(
             pid,
@@ -60,21 +63,7 @@ impl ProcessTable {
                 state: ProcessState::Ready,
                 parent_pid,
                 exit_code: None,
-                is_thread: false,
-            },
-        );
-    }
-
-    pub fn register_thread(&mut self, pid: Pid, name: String, parent_pid: Option<Pid>) {
-        self.processes.insert(
-            pid,
-            Process {
-                task_id: TaskId::from_u64(pid),
-                name,
-                state: ProcessState::Ready,
-                parent_pid,
-                exit_code: None,
-                is_thread: true,
+                is_thread,
             },
         );
     }
@@ -111,6 +100,19 @@ impl ProcessTable {
 }
 
 pub static PROCESS_TABLE: Mutex<Option<ProcessTable>> = Mutex::new(None);
+
+/// Unified kill: dispatches to thread scheduler or async executor based on process type.
+pub fn kill_process(pid: Pid) {
+    let is_thread = x86_64::instructions::interrupts::without_interrupts(|| {
+        let table = PROCESS_TABLE.lock();
+        table.as_ref().and_then(|t| t.get(pid)).map(|p| p.is_thread)
+    });
+    match is_thread {
+        Some(true) => { super::scheduler::kill_thread(pid); }
+        Some(false) => { super::executor::kill_request(pid); }
+        None => {}
+    }
+}
 
 pub fn init() {
     *PROCESS_TABLE.lock() = Some(ProcessTable::new());

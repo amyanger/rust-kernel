@@ -18,13 +18,20 @@ use x86_64::VirtAddr;
 
 pub static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
+// 8254 PIT constants
+const PIT_OSCILLATOR_HZ: u32 = 1_193_182;
+const PIT_TARGET_HZ: u32 = 100; // 10ms timeslice
+const PIT_COMMAND_PORT: u16 = 0x43;
+const PIT_CHANNEL0_PORT: u16 = 0x40;
+const PS2_DATA_PORT: u16 = 0x60;
+
 /// Configure the 8254 PIT to fire at ~100 Hz (10ms timeslice).
 pub fn init_pit() {
-    let divisor: u16 = (1_193_182u32 / 100) as u16;
+    let divisor: u16 = (PIT_OSCILLATOR_HZ / PIT_TARGET_HZ) as u16;
     unsafe {
-        Port::new(0x43).write(0x36u8);
-        Port::new(0x40).write((divisor & 0xFF) as u8);
-        Port::new(0x40).write((divisor >> 8) as u8);
+        Port::new(PIT_COMMAND_PORT).write(0x36u8);
+        Port::new(PIT_CHANNEL0_PORT).write((divisor & 0xFF) as u8);
+        Port::new(PIT_CHANNEL0_PORT).write((divisor >> 8) as u8);
     }
 }
 
@@ -155,7 +162,7 @@ extern "C" fn timer_tick_handler(frame: *mut crate::task::context::InterruptFram
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    let mut port = Port::new(0x60);
+    let mut port = Port::new(PS2_DATA_PORT);
     let scancode: u8 = unsafe { port.read() };
 
     SCANCODE_QUEUE.lock().push(scancode);

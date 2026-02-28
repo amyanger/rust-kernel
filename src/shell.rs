@@ -13,7 +13,7 @@ use crate::console::CONSOLE;
 use crate::filesystem::FILESYSTEM;
 use crate::framebuffer::FRAMEBUFFER;
 use crate::task::keyboard::ScancodeStream;
-use crate::task::process::PROCESS_TABLE;
+use crate::task::process::{PROCESS_TABLE, SHELL_PID};
 use crate::vga_buffer::WRITER;
 
 const MAX_CMD_LEN: usize = 256;
@@ -344,52 +344,26 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
             }
         }
         "spawn" => {
-            if args.is_empty() {
-                crate::println!("Usage: spawn <name> [count]");
-                return;
+            if let Some((name, count)) = parse_spawn_args(args, "spawn") {
+                let name = String::from(name);
+                let pid = crate::task::executor::spawn_request(
+                    name.clone(),
+                    crate::task::process::demo_counter(name.clone(), count),
+                    Some(SHELL_PID),
+                );
+                crate::println!("Spawned '{}' as PID {} ({} ticks)", name, pid, count);
             }
-            let (name, count_str) = match args.split_once(' ') {
-                Some((n, c)) => (n, c.trim()),
-                None => (args, "5"),
-            };
-            let count: u32 = match count_str.parse() {
-                Ok(c) => c,
-                Err(_) => {
-                    crate::println!("spawn: invalid count '{}'", count_str);
-                    return;
-                }
-            };
-            let name = String::from(name);
-            let pid = crate::task::executor::spawn_request(
-                name.clone(),
-                crate::task::process::demo_counter(name.clone(), count),
-                Some(1), // shell is parent
-            );
-            crate::println!("Spawned '{}' as PID {} ({} ticks)", name, pid, count);
         }
         "tspawn" => {
-            if args.is_empty() {
-                crate::println!("Usage: tspawn <name> [count]");
-                return;
+            if let Some((name, count)) = parse_spawn_args(args, "tspawn") {
+                let pid = crate::task::scheduler::spawn_thread(
+                    String::from(name),
+                    crate::task::scheduler::demo_thread_entry,
+                    count as u64,
+                    Some(SHELL_PID),
+                );
+                crate::println!("Spawned thread '{}' as PID {} ({} ticks)", name, pid, count);
             }
-            let (name, count_str) = match args.split_once(' ') {
-                Some((n, c)) => (n, c.trim()),
-                None => (args, "5"),
-            };
-            let count: u32 = match count_str.parse() {
-                Ok(c) => c,
-                Err(_) => {
-                    crate::println!("tspawn: invalid count '{}'", count_str);
-                    return;
-                }
-            };
-            let pid = crate::task::scheduler::spawn_thread(
-                String::from(name),
-                crate::task::scheduler::demo_thread_entry,
-                count as u64,
-                Some(1), // shell is parent
-            );
-            crate::println!("Spawned thread '{}' as PID {} ({} ticks)", name, pid, count);
         }
         "sleep" => {
             if args.is_empty() {
@@ -407,7 +381,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 String::from("sleep"),
                 crate::task::scheduler::sleep_thread_entry,
                 ms,
-                Some(1),
+                Some(SHELL_PID),
             );
             crate::println!("Sleeping for {}ms (PID {})", ms, pid);
         }
@@ -423,8 +397,8 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                     return;
                 }
             };
-            if pid == 1 {
-                crate::println!("kill: cannot kill init process (PID 1)");
+            if pid == SHELL_PID {
+                crate::println!("kill: cannot kill init process (PID {})", SHELL_PID);
                 return;
             }
             let alive = {
@@ -435,12 +409,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 crate::println!("kill: no such process (PID {})", pid);
                 return;
             }
-            // Try killing as thread first, fall back to async task kill
-            if crate::task::scheduler::is_thread(pid) {
-                crate::task::scheduler::kill_thread(pid);
-            } else {
-                crate::task::executor::kill_request(pid);
-            }
+            crate::task::process::kill_process(pid);
             crate::println!("Killed PID {}", pid);
         }
         "screenfill" => {
@@ -462,6 +431,24 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
         _ => {
             crate::println!("Unknown command: {}", command);
             crate::println!("Type 'help' for available commands.");
+        }
+    }
+}
+
+fn parse_spawn_args<'a>(args: &'a str, cmd_name: &str) -> Option<(&'a str, u32)> {
+    if args.is_empty() {
+        crate::println!("Usage: {} <name> [count]", cmd_name);
+        return None;
+    }
+    let (name, count_str) = match args.split_once(' ') {
+        Some((n, c)) => (n, c.trim()),
+        None => (args, "5"),
+    };
+    match count_str.parse() {
+        Ok(c) => Some((name, c)),
+        Err(_) => {
+            crate::println!("{}: invalid count '{}'", cmd_name, count_str);
+            None
         }
     }
 }

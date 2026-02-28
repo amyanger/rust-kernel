@@ -22,6 +22,9 @@ const THREAD_STACK_SIZE: usize = 16 * 1024; // 16 KiB per thread
 const KERNEL_CS: u64 = 0x08;
 const KERNEL_SS: u64 = 0x10;
 
+// IF (interrupts enabled) + reserved bit 1 — required for iretq
+const RFLAGS_IF: u64 = 0x202;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
     Ready,
@@ -192,7 +195,7 @@ pub fn spawn_thread(
             rdx: 0, rcx: 0, rbx: 0, rax: 0,
             rip: thread_entry_wrapper as *const () as u64,
             cs: KERNEL_CS,
-            rflags: 0x202, // IF (interrupts enabled) + reserved bit 1
+            rflags: RFLAGS_IF,
             rsp: stack_top, // thread starts with empty stack
             ss: KERNEL_SS,
         });
@@ -214,7 +217,7 @@ pub fn spawn_thread(
     x86_64::instructions::interrupts::without_interrupts(|| {
         let mut table = PROCESS_TABLE.lock();
         if let Some(table) = table.as_mut() {
-            table.register_thread(pid, name, parent_pid);
+            table.register(TaskId::from_u64(pid), name, parent_pid, true);
         }
     });
 
