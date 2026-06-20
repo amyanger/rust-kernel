@@ -9,11 +9,9 @@ extern crate alloc;
 use alloc::string::String;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 
-use crate::console::CONSOLE;
 use crate::filesystem::FILESYSTEM;
-use crate::framebuffer::FRAMEBUFFER;
 use crate::task::keyboard::ScancodeStream;
-use crate::task::process::{PROCESS_TABLE, SHELL_PID};
+use crate::task::process::{with_table, SHELL_PID};
 use crate::vga_buffer::WRITER;
 
 const MAX_CMD_LEN: usize = 256;
@@ -143,15 +141,14 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 crate::allocator::HEAP_SIZE / 1024,
                 crate::allocator::HEAP_START
             );
-            let fb = FRAMEBUFFER.lock();
-            if let Some(f) = fb.as_ref() {
+            crate::framebuffer::with_framebuffer(|f| {
                 crate::println!(
                     "Framebuffer: {}x{}, {} bpp",
                     f.width(),
                     f.height(),
                     f.info().bytes_per_pixel
                 );
-            }
+            });
         }
         "halt" => {
             crate::println!("Halting CPU...");
@@ -323,8 +320,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
             }
         }
         "ps" => {
-            let table = PROCESS_TABLE.lock();
-            if let Some(table) = table.as_ref() {
+            with_table(|table| {
                 crate::println!("{:<6} {:<4} {:<6} {:<12} {}", "PID", "TYPE", "PPID", "STATE", "NAME");
                 for (pid, proc) in table.list() {
                     let ppid = match proc.parent_pid {
@@ -341,7 +337,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                     };
                     crate::println!("{:<6} {:<4} {:<6} {:<12} {}", pid, type_str, ppid, state_str, proc.name);
                 }
-            }
+            });
         }
         "spawn" => {
             if let Some((name, count)) = parse_spawn_args(args, "spawn") {
@@ -401,10 +397,7 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 crate::println!("kill: cannot kill init process (PID {})", SHELL_PID);
                 return;
             }
-            let alive = {
-                let table = PROCESS_TABLE.lock();
-                table.as_ref().map(|t| t.is_alive(pid)).unwrap_or(false)
-            };
+            let alive = with_table(|t| t.is_alive(pid)).unwrap_or(false);
             if !alive {
                 crate::println!("kill: no such process (PID {})", pid);
                 return;
@@ -418,12 +411,9 @@ fn execute_command(cmd: &str, cwd: &mut u64) {
                 return;
             }
             if let Some((r, g, b)) = parse_color(args) {
-                // Only lock FRAMEBUFFER — don't reset console cursor,
+                // Only touch the framebuffer — don't reset console cursor,
                 // this is a raw drawing command. Use `clear` to reset text.
-                let mut fb = FRAMEBUFFER.lock();
-                if let Some(f) = fb.as_mut() {
-                    f.clear(r, g, b);
-                }
+                crate::framebuffer::with_framebuffer(|f| f.clear(r, g, b));
             } else {
                 crate::println!("Unknown color: {}", args);
             }
@@ -480,10 +470,7 @@ fn cmd_draw(args: &str) {
                 }
             };
             if let Some((r, g, b)) = parse_color(parts[5]) {
-                let mut fb = FRAMEBUFFER.lock();
-                if let Some(f) = fb.as_mut() {
-                    f.fill_rect(x, y, w, h, r, g, b);
-                }
+                crate::framebuffer::with_framebuffer(|f| f.fill_rect(x, y, w, h, r, g, b));
             } else {
                 crate::println!("Unknown color: {}", parts[5]);
             }
@@ -507,10 +494,7 @@ fn cmd_draw(args: &str) {
                 }
             };
             if let Some((r, g, b)) = parse_color(parts[5]) {
-                let mut fb = FRAMEBUFFER.lock();
-                if let Some(f) = fb.as_mut() {
-                    f.draw_line(x1, y1, x2, y2, r, g, b);
-                }
+                crate::framebuffer::with_framebuffer(|f| f.draw_line(x1, y1, x2, y2, r, g, b));
             } else {
                 crate::println!("Unknown color: {}", parts[5]);
             }
@@ -533,10 +517,7 @@ fn cmd_draw(args: &str) {
                 }
             };
             if let Some((r, g, b)) = parse_color(parts[4]) {
-                let mut fb = FRAMEBUFFER.lock();
-                if let Some(f) = fb.as_mut() {
-                    f.draw_circle(cx, cy, radius, r, g, b);
-                }
+                crate::framebuffer::with_framebuffer(|f| f.draw_circle(cx, cy, radius, r, g, b));
             } else {
                 crate::println!("Unknown color: {}", parts[4]);
             }
@@ -566,10 +547,7 @@ fn parse_color(name: &str) -> Option<(u8, u8, u8)> {
 
 fn set_fg_color(name: &str) -> bool {
     if let Some((r, g, b)) = parse_color(name) {
-        let mut console = CONSOLE.lock();
-        if let Some(c) = console.as_mut() {
-            c.set_fg(r, g, b);
-        }
+        crate::console::with_console(|c| c.set_fg(r, g, b));
         true
     } else {
         false

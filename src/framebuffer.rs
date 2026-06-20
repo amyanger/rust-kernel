@@ -20,6 +20,19 @@ pub struct Framebuffer {
 
 pub static FRAMEBUFFER: Mutex<Option<Framebuffer>> = Mutex::new(None);
 
+/// Run a closure with the framebuffer locked and interrupts disabled.
+///
+/// The framebuffer is shared between idle context (shell drawing commands) and
+/// preemptible-thread context (threads printing go through the console, which
+/// locks the framebuffer). Holding this lock with interrupts enabled risks a
+/// deadlock if a timer preemption switches to a thread that then tries to draw.
+/// Returns `None` if the framebuffer isn't initialized.
+pub fn with_framebuffer<R>(f: impl FnOnce(&mut Framebuffer) -> R) -> Option<R> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        FRAMEBUFFER.lock().as_mut().map(f)
+    })
+}
+
 impl Framebuffer {
     pub fn new(buffer: &'static mut [u8], info: FramebufferInfo) -> Self {
         Self { buffer, info }

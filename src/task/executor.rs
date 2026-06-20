@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use super::process::{Pid, ProcessState, PROCESS_TABLE};
+use super::process::{with_table, Pid, ProcessState};
 use super::{Task, TaskId};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
@@ -101,10 +101,7 @@ impl Executor {
         let task_id = task.id;
         self.spawn(task);
 
-        let mut table = PROCESS_TABLE.lock();
-        if let Some(table) = table.as_mut() {
-            table.register(task_id, name, parent_pid, false);
-        }
+        with_table(|table| table.register(task_id, name, parent_pid, false));
     }
 
     pub fn run(&mut self) -> ! {
@@ -133,11 +130,7 @@ impl Executor {
                 Some(req) => {
                     let task_id = req.task.id;
                     self.spawn(req.task);
-
-                    let mut table = PROCESS_TABLE.lock();
-                    if let Some(table) = table.as_mut() {
-                        table.register(task_id, req.name, req.parent_pid, false);
-                    }
+                    with_table(|table| table.register(task_id, req.name, req.parent_pid, false));
                 }
                 None => break,
             }
@@ -156,11 +149,8 @@ impl Executor {
                     self.tasks.remove(&task_id);
                     self.waker_cache.remove(&task_id);
 
-                    // Mark terminated in process table
-                    let mut table = PROCESS_TABLE.lock();
-                    if let Some(table) = table.as_mut() {
-                        table.terminate(pid, 1); // exit code 1 = killed
-                    }
+                    // Mark terminated in process table (exit code 1 = killed)
+                    with_table(|table| table.terminate(pid, 1));
                 }
                 None => break,
             }
@@ -176,11 +166,7 @@ impl Executor {
                 Some(id) => {
                     if self.tasks.contains_key(&id) {
                         self.ready_queue.push_back(id);
-
-                        let mut table = PROCESS_TABLE.lock();
-                        if let Some(table) = table.as_mut() {
-                            table.set_state(id.as_u64(), ProcessState::Ready);
-                        }
+                        with_table(|table| table.set_state(id.as_u64(), ProcessState::Ready));
                     }
                 }
                 None => break,
@@ -196,12 +182,7 @@ impl Executor {
             };
 
             // Mark as Running before polling
-            {
-                let mut table = PROCESS_TABLE.lock();
-                if let Some(table) = table.as_mut() {
-                    table.set_state(task_id.as_u64(), ProcessState::Running);
-                }
-            }
+            with_table(|table| table.set_state(task_id.as_u64(), ProcessState::Running));
 
             let waker = self.waker_cache.entry(task_id).or_insert_with(|| {
                 Waker::from(Arc::new(TaskWaker { task_id }))
@@ -211,17 +192,10 @@ impl Executor {
                 Poll::Ready(()) => {
                     self.tasks.remove(&task_id);
                     self.waker_cache.remove(&task_id);
-
-                    let mut table = PROCESS_TABLE.lock();
-                    if let Some(table) = table.as_mut() {
-                        table.terminate(task_id.as_u64(), 0); // clean exit
-                    }
+                    with_table(|table| table.terminate(task_id.as_u64(), 0)); // clean exit
                 }
                 Poll::Pending => {
-                    let mut table = PROCESS_TABLE.lock();
-                    if let Some(table) = table.as_mut() {
-                        table.set_state(task_id.as_u64(), ProcessState::Blocked);
-                    }
+                    with_table(|table| table.set_state(task_id.as_u64(), ProcessState::Blocked));
                 }
             }
         }

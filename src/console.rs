@@ -20,6 +20,18 @@ pub struct Console {
 
 pub static CONSOLE: Mutex<Option<Console>> = Mutex::new(None);
 
+/// Run a closure with the console locked and interrupts disabled.
+///
+/// The console is shared between idle context (shell) and preemptible-thread
+/// context (threads printing). Disabling interrupts for the critical section
+/// prevents a deadlock where a preempting thread spins on this lock forever.
+/// Returns `None` if the console isn't initialized.
+pub fn with_console<R>(f: impl FnOnce(&mut Console) -> R) -> Option<R> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        CONSOLE.lock().as_mut().map(f)
+    })
+}
+
 impl Console {
     pub fn new(fb_width: usize, fb_height: usize) -> Self {
         Self {

@@ -101,6 +101,19 @@ impl ProcessTable {
 
 pub static PROCESS_TABLE: Mutex<Option<ProcessTable>> = Mutex::new(None);
 
+/// Run a closure with the process table locked and interrupts disabled.
+///
+/// The process table is shared between idle context (executor/shell) and
+/// preemptible-thread context (scheduler). Disabling interrupts for the whole
+/// critical section is mandatory: if a timer interrupt preempted an idle-context
+/// holder of this lock, a thread could spin on it forever with interrupts
+/// disabled, deadlocking the kernel. Returns `None` if the table isn't init'd.
+pub fn with_table<R>(f: impl FnOnce(&mut ProcessTable) -> R) -> Option<R> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        PROCESS_TABLE.lock().as_mut().map(f)
+    })
+}
+
 /// Unified kill: dispatches to thread scheduler or async executor based on process type.
 pub fn kill_process(pid: Pid) {
     let is_thread = x86_64::instructions::interrupts::without_interrupts(|| {
